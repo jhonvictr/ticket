@@ -2,6 +2,7 @@ const {
   Client,
   GatewayIntentBits,
   ActionRowBuilder,
+  LabelBuilder,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -14,6 +15,7 @@ const {
   PermissionFlagsBits,
   EmbedBuilder,
 } = require("discord.js");
+const { randomUUID } = require("node:crypto");
 
 const client = new Client({
   intents: [
@@ -29,10 +31,25 @@ if (!TOKEN) {
   throw new Error("Defina a variável de ambiente DISCORD_TOKEN.");
 }
 const CLIENT_ID = "1560650361478451311";
-
-// Armazenamento em memória das configurações por Servidor
-const serverConfigs = new Map();
-
+const CARGO_APROVADO_ID = "1559017621238841474";
+const CARGO_CHOQUE_ID = "1559017259320610906";
+const CARGO_REMOVER_APROVACAO_ID = "1559020986056179732";
+const RECRUTADORES_PERMITIDOS = [
+  "1399735344890511378",
+  "1011220620442353695",
+];
+const CONFIGURACAO_PADRAO = {
+  canalAprovacaoId: "1560653078364164107",
+  cargos: {
+    CMD: "1559011358131888188",
+    CPT: "1559015599252832347",
+    TEN: "1559016732708831232",
+    SGT: "1559016860434038816",
+    COP: "1559016924774404157",
+    OFC: "1559017107302125648",
+    CDT: "1559017186423611482",
+  },
+};
 // Patentes padrão do CHOQUE
 const PATENTES_PADRAO = {
   CMD: "Comandante",
@@ -44,18 +61,9 @@ const PATENTES_PADRAO = {
   CDT: "Cadete",
 };
 
-const selecoesPatente = new Map();
 const solicitacoesPendentes = new Set();
+const solicitacoesAprovacao = new Map();
 
-function getConfig(guildId) {
-  if (!serverConfigs.has(guildId)) {
-    serverConfigs.set(guildId, {
-      canalAprovacaoId: null,
-      cargos: {},
-    });
-  }
-  return serverConfigs.get(guildId);
-}
 // ================================================================
 
 // Definição dos Comandos Slash
@@ -63,45 +71,6 @@ const commands = [
   new SlashCommandBuilder()
     .setName("painel-recrutamento")
     .setDescription("Envia o painel de recrutamento no canal atual")
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-  new SlashCommandBuilder()
-    .setName("config-canal")
-    .setDescription(
-      "Define o canal onde as solicitações de setagem serão enviadas",
-    )
-    .addChannelOption((opt) =>
-      opt
-        .setName("canal")
-        .setDescription("Selecione o canal de aprovações da Staff")
-        .setRequired(true),
-    )
-    .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
-
-  new SlashCommandBuilder()
-    .setName("config-cargo")
-    .setDescription("Vincule uma patente ao cargo do Discord")
-    .addStringOption((opt) =>
-      opt
-        .setName("patente")
-        .setDescription("Selecione a patente")
-        .setRequired(true)
-        .addChoices(
-          { name: "Cadete [CDT]", value: "CDT" },
-          { name: "Oficial [OFC]", value: "OFC" },
-          { name: "Corporal [COP]", value: "COP" },
-          { name: "Sargento [SGT]", value: "SGT" },
-          { name: "Tenente [TEN]", value: "TEN" },
-          { name: "Capitão [CPT]", value: "CPT" },
-          { name: "Comandante [CMD]", value: "CMD" },
-        ),
-    )
-    .addRoleOption((opt) =>
-      opt
-        .setName("cargo")
-        .setDescription("Selecione o cargo do Discord correspondente")
-        .setRequired(true),
-    )
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   new SlashCommandBuilder()
@@ -127,68 +96,38 @@ client.on("clientReady", () => {
 });
 
 client.on("interactionCreate", async (interaction) => {
-  // --- COMANDOS DE CONFIGURAÇÃO ---
-
-  // 1. Configurar Canal de Aprovações
-  if (
-    interaction.isChatInputCommand() &&
-    interaction.commandName === "config-canal"
-  ) {
-    const canal = interaction.options.getChannel("canal");
-    const config = getConfig(interaction.guild.id);
-    config.canalAprovacaoId = canal.id;
-
-    await interaction.reply({
-      content: `✅ Canal de solicitações definido para: ${canal}`,
-      ephemeral: true,
-    });
-  }
-
-  // 2. Vincular Cargo do Discord a uma Patente
-  if (
-    interaction.isChatInputCommand() &&
-    interaction.commandName === "config-cargo"
-  ) {
-    const patente = interaction.options.getString("patente");
-    const cargo = interaction.options.getRole("cargo");
-    const config = getConfig(interaction.guild.id);
-
-    config.cargos[patente] = cargo.id;
-
-    await interaction.reply({
-      content: `✅ A patente **${PATENTES_PADRAO[patente]} [${patente}]** foi vinculada ao cargo ${cargo}`,
-      ephemeral: true,
-    });
-  }
-
-  // 3. Ver Configurações do Servidor
+  // Ver configurações do servidor
   if (
     interaction.isChatInputCommand() &&
     interaction.commandName === "ver-config"
   ) {
-    const config = getConfig(interaction.guild.id);
+    const config = CONFIGURACAO_PADRAO;
     const canalTexto = config.canalAprovacaoId
       ? `<#${config.canalAprovacaoId}>`
       : "❌ Não configurado";
-
-    let listaCargos = "";
-    for (const [tag, nome] of Object.entries(PATENTES_PADRAO)) {
-      const cargoId = config.cargos[tag];
-      listaCargos += `• **${nome} [${tag}]:** ${cargoId ? `<@&${cargoId}>` : "❌ Não configurado"}\n`;
-    }
+    const listaCargos = Object.entries(PATENTES_PADRAO)
+      .map(([tag, nome]) => {
+        const cargoId = config.cargos[tag];
+        return `• **${nome} [${tag}]:** ${cargoId ? `<@&${cargoId}>` : "❌ Não configurado"}`;
+      })
+      .join("\n");
 
     const embed = new EmbedBuilder()
       .setTitle("⚙️ Configurações Atuais do Bot")
       .addFields(
         { name: "Canal de Aprovações", value: canalTexto },
-        { name: "Mapeamento de Cargos", value: listaCargos },
+        { name: "Cargos por patente", value: listaCargos },
+        {
+          name: "Cargos automáticos na aprovação",
+          value: `• **Aprovado:** <@&${CARGO_APROVADO_ID}>\n• **Choque:** <@&${CARGO_CHOQUE_ID}>`,
+        },
       )
       .setColor(0x00ff00);
 
     await interaction.reply({ embeds: [embed], ephemeral: true });
   }
 
-  // 4. Enviar Painel de Recrutamento
+  // Enviar painel de recrutamento
   if (
     interaction.isChatInputCommand() &&
     interaction.commandName === "painel-recrutamento"
@@ -224,42 +163,45 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    const selectMenu = new StringSelectMenuBuilder()
-      .setCustomId("select_patente")
-      .setPlaceholder("Selecione a sua Patente / Cargo")
-      .addOptions(
-        Object.entries(PATENTES_PADRAO).map(([tag, nome]) => ({
-          label: `${nome} [${tag}]`,
-          value: tag,
-          description: `Patente: ${nome}`,
-        })),
-      );
+    const config = CONFIGURACAO_PADRAO;
+    const patentesDisponiveis = Object.entries(config.cargos)
+      .filter(([tag, cargoId]) => Object.hasOwn(PATENTES_PADRAO, tag) && cargoId)
+      .map(([tag, cargoId]) => ({
+        tag,
+        cargo: interaction.guild.roles.cache.get(cargoId),
+      }))
+      .filter(({ cargo }) => cargo);
 
-    const row = new ActionRowBuilder().addComponents(selectMenu);
-
-    await interaction.reply({
-      content: "Selecione a sua patente na lista abaixo:",
-      components: [row],
-      ephemeral: true,
-    });
-  }
-
-  if (
-    interaction.isStringSelectMenu() &&
-    interaction.customId === "select_patente"
-  ) {
-    const tagSelecionada = interaction.values[0];
-    selecoesPatente.set(interaction.user.id, tagSelecionada);
+    if (patentesDisponiveis.length === 0) {
+      return interaction.reply({
+        content:
+          "❌ Nenhum cargo de patente está configurado no código do bot.",
+        ephemeral: true,
+      });
+    }
 
     const modal = new ModalBuilder()
       .setCustomId("modal_dados_membro")
-      .setTitle(`Setagem - ${PATENTES_PADRAO[tagSelecionada]}`);
+      .setTitle("Solicitação de Setagem");
+
+    const selectPatente = new StringSelectMenuBuilder()
+      .setCustomId("patente")
+      .setPlaceholder("Selecione sua patente / cargo")
+      .setRequired(true)
+      .addOptions(
+        patentesDisponiveis.map(({ tag, cargo }) => ({
+          label: `${cargo.name} [${tag}]`.slice(0, 100),
+          value: tag,
+          description: `Patente: ${cargo.name}`.slice(0, 100),
+        })),
+      );
 
     const inputNome = new TextInputBuilder()
       .setCustomId("nome_rp")
       .setLabel("Nome no RP")
       .setPlaceholder("Ex: Menor")
       .setStyle(TextInputStyle.Short)
+      .setMaxLength(15)
       .setRequired(true);
 
     const inputIdRp = new TextInputBuilder()
@@ -267,19 +209,47 @@ client.on("interactionCreate", async (interaction) => {
       .setLabel("Seu ID / Passaporte")
       .setPlaceholder("Ex: 3204")
       .setStyle(TextInputStyle.Short)
+      .setMaxLength(6)
       .setRequired(true);
 
-    const inputRecrutador = new TextInputBuilder()
+    let opcoesRecrutadores;
+    try {
+      const membrosRecrutadores = await Promise.all(
+        RECRUTADORES_PERMITIDOS.map((id) =>
+          interaction.guild.members.fetch(id),
+        ),
+      );
+      opcoesRecrutadores = membrosRecrutadores.map((membro) => ({
+        label: membro.displayName.slice(0, 100),
+        value: membro.id,
+        description: `@${membro.user.username}`.slice(0, 100),
+      }));
+    } catch (error) {
+      console.error("Erro ao carregar os recrutadores permitidos:", error);
+      return interaction.reply({
+        content:
+          "❌ Não consegui carregar os recrutadores permitidos. Confira se os dois usuários fazem parte deste servidor.",
+        ephemeral: true,
+      });
+    }
+
+    const selectRecrutador = new StringSelectMenuBuilder()
       .setCustomId("recrutador")
-      .setLabel("Recrutado por (Ex: @[CMD] Jhon Santos | 1183)")
-      .setPlaceholder("@[CMD] Jhon Santos | 1183")
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true);
+      .setPlaceholder("Selecione quem recrutou você")
+      .setRequired(true)
+      .addOptions(opcoesRecrutadores);
 
+    modal.addLabelComponents(
+      new LabelBuilder()
+        .setLabel("Patente / Cargo")
+        .setStringSelectMenuComponent(selectPatente),
+      new LabelBuilder()
+        .setLabel("Recrutado por")
+        .setStringSelectMenuComponent(selectRecrutador),
+    );
     modal.addComponents(
       new ActionRowBuilder().addComponents(inputNome),
       new ActionRowBuilder().addComponents(inputIdRp),
-      new ActionRowBuilder().addComponents(inputRecrutador),
     );
 
     await interaction.showModal(modal);
@@ -290,12 +260,49 @@ client.on("interactionCreate", async (interaction) => {
     interaction.customId === "modal_dados_membro"
   ) {
     const userId = interaction.user.id;
-    const tag = selecoesPatente.get(userId);
+    const tag = interaction.fields.getStringSelectValues("patente")[0];
     const nome = interaction.fields.getTextInputValue("nome_rp");
     const idRp = interaction.fields.getTextInputValue("id_rp");
-    const recrutador = interaction.fields.getTextInputValue("recrutador");
+    const recrutadorId =
+      interaction.fields.getStringSelectValues("recrutador")[0];
 
-    const config = getConfig(interaction.guild.id);
+    if (nome.length > 15) {
+      return interaction.reply({
+        content: "❌ O nome no RP pode ter no máximo 15 caracteres.",
+        ephemeral: true,
+      });
+    }
+
+    if (!/^\d{1,6}$/.test(idRp)) {
+      return interaction.reply({
+        content: "❌ O ID / passaporte deve conter somente números e ter até 6 dígitos.",
+        ephemeral: true,
+      });
+    }
+
+    if (!Object.hasOwn(PATENTES_PADRAO, tag)) {
+      return interaction.reply({
+        content: "❌ Selecione uma patente válida para enviar a solicitação.",
+        ephemeral: true,
+      });
+    }
+
+    if (!RECRUTADORES_PERMITIDOS.includes(recrutadorId)) {
+      return interaction.reply({
+        content: "❌ Selecione um dos recrutadores permitidos.",
+        ephemeral: true,
+      });
+    }
+
+    const config = CONFIGURACAO_PADRAO;
+
+    if (!config.cargos[tag]) {
+      return interaction.reply({
+        content:
+          "❌ O cargo dessa patente não está configurado no código do bot.",
+        ephemeral: true,
+      });
+    }
 
     if (!config.canalAprovacaoId) {
       return interaction.reply({
@@ -305,39 +312,52 @@ client.on("interactionCreate", async (interaction) => {
       });
     }
 
-    solicitacoesPendentes.add(userId);
-
     const textoSolicitacao =
       `**Nome:** ${nome}\n` +
       `**Id:** ${idRp}\n` +
       `**Passaporte:** ${idRp}\n` +
       `**Cargo:** ${PATENTES_PADRAO[tag]}\n` +
-      `**Recrutado por:** ${recrutador}\n` +
+      `**Recrutado por:** <@${recrutadorId}>\n` +
       `**Solicitante:** <@${userId}>`;
 
+    const solicitacaoId = randomUUID();
     const btnAprovar = new ButtonBuilder()
-      .setCustomId(`aprv_${userId}_${tag}_${nome}_${idRp}`)
+      .setCustomId(`aprv_${solicitacaoId}`)
       .setLabel("Aprovar")
       .setEmoji("✅")
       .setStyle(ButtonStyle.Success);
 
     const btnRecusar = new ButtonBuilder()
-      .setCustomId(`reje_${userId}`)
+      .setCustomId(`reje_${solicitacaoId}`)
       .setLabel("Recusar")
       .setEmoji("❌")
       .setStyle(ButtonStyle.Danger);
 
     const row = new ActionRowBuilder().addComponents(btnAprovar, btnRecusar);
 
-    const canalAprovacao = interaction.guild.channels.cache.get(
+    const canalAprovacao = await interaction.guild.channels.fetch(
       config.canalAprovacaoId,
     );
-    if (canalAprovacao) {
-      await canalAprovacao.send({
-        content: `📌 **Nova Solicitação de Setagem:**\n\n${textoSolicitacao}`,
-        components: [row],
+    if (!canalAprovacao || !canalAprovacao.isTextBased()) {
+      return interaction.reply({
+        content:
+          "❌ O canal de aprovação configurado não existe ou não aceita mensagens. Confira o ID do canal.",
+        ephemeral: true,
       });
     }
+
+    await canalAprovacao.send({
+      content: `📌 **Nova Solicitação de Setagem:**\n\n${textoSolicitacao}`,
+      components: [row],
+    });
+
+    solicitacoesPendentes.add(userId);
+    solicitacoesAprovacao.set(solicitacaoId, {
+      userId,
+      tag,
+      nome,
+      idRp,
+    });
 
     await interaction.reply({
       content:
@@ -352,23 +372,72 @@ client.on("interactionCreate", async (interaction) => {
     const customId = interaction.customId;
 
     if (customId.startsWith("aprv_")) {
-      const [, targetUserId, tag, nome, idRp] = customId.split("_");
-      const config = getConfig(interaction.guild.id);
+      const solicitacaoId = customId.slice("aprv_".length);
+      const solicitacao = solicitacoesAprovacao.get(solicitacaoId);
+      if (!solicitacao) {
+        return interaction.reply({
+          content:
+            "❌ Não encontrei os dados dessa solicitação. Peça para a pessoa enviar uma nova solicitação.",
+          ephemeral: true,
+        });
+      }
+
+      const { userId: targetUserId, tag, nome, idRp } = solicitacao;
+      const config = CONFIGURACAO_PADRAO;
+      const cargosParaAtribuir = [
+        config.cargos[tag],
+        CARGO_APROVADO_ID,
+        CARGO_CHOQUE_ID,
+        CARGO_REMOVER_APROVACAO_ID,
+      ];
+
+      if (!config.cargos[tag]) {
+        return interaction.reply({
+          content: `❌ O cargo da patente **${PATENTES_PADRAO[tag]} [${tag}]** não está configurado corretamente no código do bot.`,
+          ephemeral: true,
+        });
+      }
 
       try {
         const member = await interaction.guild.members.fetch(targetUserId);
+        const botMember = await interaction.guild.members.fetchMe();
+        const cargos = cargosParaAtribuir.map((cargoId) =>
+          interaction.guild.roles.cache.get(cargoId),
+        );
 
-        // Alterar apelido para o formato: [TAG] Nome | ID
-        const novoNick = `[${tag}] ${nome} | ${idRp}`;
-        await member.setNickname(novoNick);
-
-        // Adicionar o cargo se já tiver sido configurado via /config-cargo
-        const cargoId = config.cargos[tag];
-        if (cargoId) {
-          await member.roles.add(cargoId);
+        if (cargos.some((cargo) => !cargo)) {
+          return interaction.reply({
+            content:
+              "❌ Não encontrei um dos cargos de patente, Aprovado, Choque ou do cargo a remover neste servidor. Confira os IDs configurados no código do bot.",
+            ephemeral: true,
+          });
         }
 
+        if (
+          !botMember.permissions.has(PermissionFlagsBits.ManageRoles) ||
+          !botMember.permissions.has(PermissionFlagsBits.ManageNicknames) ||
+          cargos.some((cargo) => !cargo.editable) ||
+          !member.manageable
+        ) {
+          return interaction.reply({
+            content:
+              "❌ Não consigo atualizar essa pessoa. Confira se o bot tem as permissões **Gerenciar cargos** e **Gerenciar apelidos**, e se o cargo do bot está acima dos cargos de patente, Aprovado, Choque e da pessoa.",
+            ephemeral: true,
+          });
+        }
+
+        const novoNick = `[${tag}] ${nome} | ${idRp}`;
+        await member.roles.add(cargos.slice(0, 3));
+        if (member.roles.cache.has(CARGO_REMOVER_APROVACAO_ID)) {
+          await member.roles.remove(
+            CARGO_REMOVER_APROVACAO_ID,
+            "Solicitação de setagem aprovada",
+          );
+        }
+        await member.setNickname(novoNick, "Solicitação de setagem aprovada");
+
         solicitacoesPendentes.delete(targetUserId);
+        solicitacoesAprovacao.delete(solicitacaoId);
 
         await interaction.update({
           content:
@@ -380,16 +449,25 @@ client.on("interactionCreate", async (interaction) => {
         console.error(err);
         await interaction.reply({
           content:
-            "❌ Erro ao alterar o apelido/cargo do usuário. Verifique se o cargo do Bot está no topo da lista de cargos.",
+            "❌ O Discord não permitiu atualizar o cargo e/ou apelido. Confira as permissões e a hierarquia de cargos do bot e tente novamente.",
           ephemeral: true,
         });
       }
     }
 
     if (customId.startsWith("reje_")) {
-      const [, targetUserId] = customId.split("_");
+      const solicitacaoId = customId.slice("reje_".length);
+      const solicitacao = solicitacoesAprovacao.get(solicitacaoId);
+      if (!solicitacao) {
+        return interaction.reply({
+          content:
+            "❌ Não encontrei os dados dessa solicitação. Ela pode ter sido processada ou o bot foi reiniciado.",
+          ephemeral: true,
+        });
+      }
 
-      solicitacoesPendentes.delete(targetUserId);
+      solicitacoesPendentes.delete(solicitacao.userId);
+      solicitacoesAprovacao.delete(solicitacaoId);
 
       await interaction.update({
         content:
